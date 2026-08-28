@@ -4,8 +4,12 @@
 можно было запускать и тестировать локально — в своём контейнере или вообще без контейнеров, без
 шлюза, без auth-service, без MongoDB.
 
-Парный документ: [GATEWAY_SERVICE_INTEGRATION_API.md](GATEWAY_SERVICE_INTEGRATION_API.md) —
-что шлюз даёт сервису и какие у него API.
+Парные документы:
+
+* [GATEWAY_SERVICE_INTEGRATION_API.md](GATEWAY_SERVICE_INTEGRATION_API.md) — что шлюз даёт
+  сервису и какие у него API.
+* [AUTH_CONNECTOR_REFERENCE.md](AUTH_CONNECTOR_REFERENCE.md) — справочник по API пакета:
+  классы, декораторы, сигнатуры, что устарело.
 
 ---
 

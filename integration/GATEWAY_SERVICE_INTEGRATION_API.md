@@ -7,10 +7,14 @@
 
 * [AUTH_CONNECTOR_SETUP_AND_LOCAL_DEV.md](AUTH_CONNECTOR_SETUP_AND_LOCAL_DEV.md) — как подключить
   `auth-connector` и тестировать сервис локально.
+* [AUTH_CONNECTOR_REFERENCE.md](AUTH_CONNECTOR_REFERENCE.md) — справочник по API пакета:
+  классы, декораторы, сигнатуры, что устарело.
 * [TELEGRAM_NOTIFICATIONS_INTEGRATION_GUIDE.md](TELEGRAM_NOTIFICATIONS_INTEGRATION_GUIDE.md) —
   Telegram-уведомления в подробностях.
 * [!gateway/ADR-001-service-based-authorization.md](../../!gateway/ADR-001-service-based-authorization.md) —
   решение по модели прав.
+* [../AGENTS.md](../AGENTS.md) — брифинг для ИИ-агента: инварианты, обязательные тесты,
+  требования к документации в сервисе.
 
 ---
 
