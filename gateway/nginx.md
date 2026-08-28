@@ -20,9 +20,13 @@
 | `conf/default.conf` | `/etc/nginx/conf.d/default.conf` | точка входа: `include gateway.inc` |
 | `conf/gateway.inc` | `/etc/nginx/conf.d/gateway.inc` | server-блок 443: весь шлюз |
 | `conf/quiz.inc` | `/etc/nginx/conf.d/quiz.inc` | маршруты quiz, включается внутри server-блока |
+| `conf/errors.inc` | `/etc/nginx/conf.d/errors.inc` | страницы ошибок: перехват, раздача, заголовки; включается внутри server-блока |
+| `conf/errors-pages.inc` | `/etc/nginx/conf.d/errors-pages.inc` | **автогенерация** `error-pages/generate.py`: карта `error_page` код → файл |
+| `conf/errors-preview.inc` | `/etc/nginx/conf.d/errors-preview.inc` | **автогенерация**: витрина `/errors-preview/` для администратора |
 | `dynamic/services.conf` + `dynamic/service-*.conf` | том `nginx_dynamic_config` | **автогенерация** auth-service, руками не править |
 | `certs/` | `/etc/nginx/certs` (ro) | `gh.uz.chain.pem`, `key.pem` |
-| `html/` | образ | `404.html`, `favicon.ico`, `favicon.svg`, `_shared/` |
+| `html/` | образ | `favicon.ico`, `favicon.svg`, `_shared/` |
+| `html/errors/` | образ + монтирование `:ro` | 38 страниц ошибок и `errors.css`; **автогенерация**, исходники в `nginx/error-pages/` |
 
 `conf/legacy.inc/` — пустой каталог, оставшийся от ручных конфигов сервисов;
 нигде не подключается, маршруты давно генерируются динамически.
@@ -54,7 +58,9 @@ proxy_pass $backend_referal;
 |---|---|
 | `/_shared/` | `html/_shared` — вендоренные JS/CSS-библиотеки, общие для всех сервисов (`Cache-Control: immutable`, 30 дней) |
 | `/favicon.svg` | `html/favicon.svg` |
-| `/404.html` | `html/404.html` |
+| `/_errors/<код>.html` | `html/errors/` — `internal`, только по редиректу `error_page`, SSI включён |
+| `/_errors/errors.css` | `html/errors/errors.css` — публично, кэш 1 час |
+| `/errors-preview/` | витрина всех кодов, `auth_request /verify-admin` |
 
 `sub_filter` вставляет `<link rel="icon" href="/vite.svg?v=2">` перед `</head>`
 всех HTML-ответов; сам `/vite.svg` проксируется в auth-service.
@@ -131,7 +137,71 @@ CSP разрешает CDN, но **прод CDN не видит**: ассеты 
 | `403` | `302 /access-denied?service=$request_uri` |
 | `403` на `/logs` | `302 /menu` |
 | `403` на `/services/<key>/logs` | `302 /services/<key>` |
-| `404` | `html/404.html` |
+| остальные 4xx и 5xx | стилизованная страница `html/errors/<код>.html` |
+
+Кодов со страницей 38: `400`, `402`, `404`–`418`, `421`–`431`, `451`,
+`500`–`511`. Каталог с текстами — `nginx/error-pages/codes.py`, там же
+генератор и тесты; подробности и порядок правки — `nginx/error-pages/README.md`.
+
+`401` и `403` страниц не получают намеренно: это часть контракта авторизации,
+пользователя надо увести на вход или на `/access-denied`, а не показать ему
+красивый тупик.
+
+### Перехват ответов сервисов
+
+`proxy_intercept_errors on` объявлен на уровне server-блока, поэтому действует
+и на автогенерируемые конфиги сервисов. Без него `500` от сервиса уходил бы
+пользователю как есть — голой страницей Flask или пустым телом.
+
+**Тело ответа сервиса при перехвате выбрасывается.** Разбирать JSON nginx не
+умеет, поэтому на странице остаётся то, что видно снаружи: код, `$upstream_status`,
+`$upstream_addr`, адрес запроса, время и `$request_id`. Сервис, которому есть
+что сказать, кладёт текст в заголовки ответа `X-Error-Code` и `X-Error-Detail` —
+шлюз читает их как `$upstream_http_*` и показывает в блоке подробностей.
+
+Перехват отключён (`proxy_intercept_errors off`) там, где HTML вместо ответа
+ломает вызывающий код:
+
+| Где | Почему |
+|---|---|
+| `/static/`, `/data/`, `/avatar/`, `/vite.svg`, `<prefix>/static/` | ассеты: браузеру нужен код, а не страница на несколько килобайт |
+| `^~ /api/`, `/check-user-exists` | JSON-API портала, ответы читает JS админки и `auth-connector` |
+| `= /verify`, `= /verify-admin`, `= /verify-logs-auth`, `= /verify-service-logs-auth` | подзапросы `auth_request` |
+| `/logs`, `/services/<key>/logs` | вебсокеты Dozzle |
+| `<prefix>/health` | опрашивают monitoring-service и docker |
+
+Обратная сторона решения: **JSON-ответы сервисов с кодом 4xx и 5xx под их
+префиксом до клиента больше не доходят** — `fetch()` внутри сервиса получит
+HTML-страницу. Сервисам, у которых есть свой JSON-API под префиксом, нужно
+либо проверять `content-type`, либо отдавать ошибки кодом `200` с телом.
+Ветка «JSON вместо страницы для API-клиентов» заготовлена в `errors.inc`
+и включается вместе с `map $http_accept $gw_wants_json` в `nginx.conf`.
+
+### Чей раздел ответил
+
+Имя на странице берётся из `$gw_service_key` — переменную выставляет
+сгенерированный конфиг сервиса (шаблон в `auth-service/routes/nginx_config.go`).
+Строка стоит **до** `rewrite ... break`: с флагом `break` фаза rewrite
+обрывается, и `set` после него не выполнится.
+
+Если до сервиса не дошло (незарегистрированный префикс отдаёт `404` на уровне
+шлюза), имя берётся из первого сегмента пути — `map $request_uri
+$gw_path_service` в `nginx.conf`. Источник именно `$request_uri`: `error_page`
+делает внутренний редирект, и `$uri` к моменту вычисления карты указывал бы
+уже на страницу ошибки. Собственные разделы шлюза в карте дают пустую строку,
+и страница пишет «шлюз портала».
+
+### Прочее по ошибкам
+
+- `limit_req_status 429` — превышение лимита частоты отдаёт `429`, а не
+  дефолтный `503`: причина другая, и текст страницы должен ей соответствовать.
+- Тема страницы читается из cookie `gh_theme` через SSI — той же, что и на
+  остальных страницах портала; без cookie работает системная тема.
+- SSI включён **только** на `/_errors/` и `/errors-preview/`. Глобально его
+  включать нельзя: nginx начнёт разбирать HTML всех проксируемых страниц.
+- `add_header` в `location /_errors/` отменяет наследование серверных
+  заголовков безопасности, поэтому они перечислены в блоке заново, с более
+  строгим CSP.
 
 ## Прочее
 

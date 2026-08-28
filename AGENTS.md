@@ -68,6 +68,7 @@
 | понять сети, путь запроса, service discovery | [gateway/architecture.md](gateway/architecture.md) |
 | роуты, права, миграции, MongoDB auth-service | [gateway/auth-service.md](gateway/auth-service.md) |
 | конфиги nginx, rate-limit, заголовки | [gateway/nginx.md](gateway/nginx.md) |
+| страницы ошибок, перехват ответов сервисов | [gateway/nginx.md](gateway/nginx.md) §Обработка ошибок |
 | очереди доставки, приоритеты, лимиты каналов | [gateway/notification-service.md](gateway/notification-service.md) |
 | Telegram: привязка, вход, лимиты Bot API | [gateway/notification-bot.md](gateway/notification-bot.md) |
 | health-опрос и алерты | [gateway/monitoring-service.md](gateway/monitoring-service.md) |
@@ -111,6 +112,13 @@
 12. **Получателя уведомления задаёт `login` портала**, а не email и не
     telegram-ник. Внешний адресат — отдельным полем `external_recipient`.
     Заполнено должно быть ровно одно поле.
+13. **Ошибки рисует шлюз, а не сервис.** `proxy_intercept_errors on` на всём
+    server-блоке: ответ сервиса с кодом `4xx`/`5xx` теряет тело и заменяется
+    страницей шлюза. Своя страница ошибки не нужна, а JSON с кодом ошибки под
+    префиксом сервиса до `fetch()` не дойдёт. Причину передают заголовками
+    `X-Error-Code` и `X-Error-Detail` — раздел 8.1
+    [GATEWAY_SERVICE_INTEGRATION_API.md](integration/GATEWAY_SERVICE_INTEGRATION_API.md).
+    Исключения: `<prefix>/static/`, `<prefix>/health`, `/api/` шлюза.
 
 ---
 
@@ -249,6 +257,7 @@ X-API-Key: <персональный ключ сервиса>
 | `!gateway/auth-service/tests/` | 9 файлов Go-тестов: роли, права, middleware, CRUD сервисов, внешние роли |
 | `!gateway/auth-service/{models,routes}` | `recipients_test.go`, `recipient_handlers_test.go` |
 | `!gateway/notification-service/` | `limiter_test.go`, `priority_test.go`, `recipients_test.go`, `resolve_test.go`, `transports_test.go` |
+| `!gateway/nginx/error-pages/tests/` | pytest: страницы ошибок, карта `error_page`, обвязка nginx. Ни сети, ни докера |
 | `client_service/test_housing_backfill.py` | **эталон для Python** — pytest, SQLite in-memory, `TestConfig`, моки |
 | `client_service/test_housing_api.py` | не тест: ручной скрипт с `sys.path.insert('/app')`, требует боевую БД, печатает в stdout. Так не делать |
 | `referal`, `apartment_finder`, `scriptovod` | тестов нет |
@@ -269,6 +278,7 @@ X-API-Key: <персональный ключ сервиса>
 | Где | Тип | Как запускать |
 |---|---|---|
 | `!gateway/notification-service/*_test.go` | **юнит**, БД и сеть не нужны | `cd '!gateway/notification-service' && go test ./...` |
+| `!gateway/nginx/error-pages/tests/` | **юнит**, читают файлы репозитория | `cd '!gateway/nginx/error-pages' && pytest` |
 | `!gateway/auth-service/models`, `routes` | юнит | `cd '!gateway/auth-service' && go test ./models/... ./routes/...` |
 | `!gateway/auth-service/tests/` | **интеграционные**, нужна живая MongoDB на `localhost:27017` | поднять mongo оверрайдом, затем `go test ./tests/...` |
 
@@ -430,6 +440,7 @@ cd '!gateway'
 docker compose up -d --build            # весь шлюз
 docker compose logs -f auth-service
 docker exec gateway-nginx-1 nginx -t    # конфиг валиден
+docker kill -s HUP gateway-nginx-1      # применить правку conf/*.inc и страниц ошибок
 curl -k https://localhost/health
 
 # после правки .env — restart НЕ перечитывает env_file
@@ -479,6 +490,8 @@ docker compose up -d --force-recreate auth-service
 | ссылки без префикса | нет `ProxyFix(x_prefix=1)` / `PrefixMiddleware` |
 | ФИО в кракозябрах | не декодирован base64 |
 | `504` на тяжёлом отчёте | лимит nginx 60 с — нужна асинхронная выгрузка |
+| `fetch()` получил HTML вместо JSON | шлюз перехватил `4xx`/`5xx` и подменил тело страницей ошибки |
+| на странице ошибки «шлюз портала» вместо имени сервиса | запрос не дошёл до сервиса: префикс не зарегистрирован либо ошибка на уровне шлюза |
 | `400 user_not_found` на живом сотруднике | в `login` ушёл email или telegram-ник вместо логина портала |
 | разом `no_service_access` | `SERVICE_AUTH_KEY_MAP` не сопоставил имя ключа с `service_key` |
 | `503 auth_unavailable` | auth-service недоступен, уведомление **не создано** |
