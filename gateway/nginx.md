@@ -23,6 +23,7 @@
 | `conf/errors.inc` | `/etc/nginx/conf.d/errors.inc` | страницы ошибок: перехват, раздача, заголовки; включается внутри server-блока |
 | `conf/errors-pages.inc` | `/etc/nginx/conf.d/errors-pages.inc` | **автогенерация** `error-pages/generate.py`: карта `error_page` код → файл |
 | `conf/errors-preview.inc` | `/etc/nginx/conf.d/errors-preview.inc` | **автогенерация**: витрина `/errors-preview/` для администратора |
+| `conf/errors-contact.inc` | `/etc/nginx/conf.d/errors-contact.inc` | **автогенерация** entrypoint из `SUPPORT_TELEGRAM`; в репозитории файла нет |
 | `dynamic/services.conf` + `dynamic/service-*.conf` | том `nginx_dynamic_config` | **автогенерация** auth-service, руками не править |
 | `certs/` | `/etc/nginx/certs` (ro) | `gh.uz.chain.pem`, `key.pem` |
 | `html/` | образ | `favicon.ico`, `favicon.svg`, `_shared/` |
@@ -38,6 +39,23 @@
 упал бы и шлюз не поднялся бы без единого зарегистрированного сервиса.
 `nginx -t` выполняется только для лога: недоступный upstream на этом этапе
 нормален.
+
+Там же генерируется `/etc/nginx/conf.d/errors-contact.inc` — одна директива
+`set $gw_support_telegram "<логин>";` из переменной окружения. nginx не читает
+окружение в конфиге, поэтому значение приходится превращать в конфиг на старте.
+Значение чистится до `[A-Za-z0-9_]`: кавычка или перевод строки в переменной
+сломали бы конфиг и не дали шлюзу подняться.
+
+## Переменные окружения
+
+| Переменная | Значение | Что делает |
+|---|---|---|
+| `TZ` | `Asia/Tashkent` | часовой пояс в логах и на страницах ошибок |
+| `SUPPORT_TELEGRAM` | логин без `@`, по умолчанию пусто | ссылка «написать в Telegram» на страницах ошибок. Пусто — блок не выводится вовсе. Не секрет: значение видит любой пользователь портала |
+
+Переменная приходит из `!gateway/.env` через `docker-compose.yaml`. После её
+правки нужен `docker compose up -d --force-recreate nginx`: `restart` не
+перечитывает `env_file`.
 
 ## Почему `proxy_pass` через переменную
 
@@ -195,6 +213,13 @@ $gw_path_service` в `nginx.conf`. Источник именно `$request_uri`:
 
 - `limit_req_status 429` — превышение лимита частоты отдаёт `429`, а не
   дефолтный `503`: причина другая, и текст страницы должен ей соответствовать.
+- Фон с частицами — тот же `particles.js`, что на остальных страницах портала,
+  из `/_shared/js/particles.min.js`. Файл отдаёт сам nginx, поэтому анимация
+  жива и когда лежит auth-service. Скрипта нет или включён
+  `prefers-reduced-motion` — страница просто рисуется без фона. Из-за внешнего
+  файла в CSP страниц ошибок стоит `script-src 'self' 'unsafe-inline'`.
+- Ссылка на поддержку берётся из `$gw_support_telegram` (см. `SUPPORT_TELEGRAM`
+  выше) и обёрнута в `<!--# if -->`: переменная пуста — блока нет.
 - Тема страницы читается из cookie `gh_theme` через SSI — той же, что и на
   остальных страницах портала; без cookie работает системная тема.
 - SSI включён **только** на `/_errors/` и `/errors-preview/`. Глобально его
