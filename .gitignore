@@ -1,0 +1,8 @@
+# Документация — только markdown и вложения к нему.
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.tmp
+*.bak
+~$*
